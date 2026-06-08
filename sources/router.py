@@ -12,6 +12,7 @@ from sources.agents.code_agent import CoderAgent
 from sources.agents.casual_agent import CasualAgent
 from sources.agents.planner_agent import FileAgent
 from sources.agents.browser_agent import BrowserAgent
+from sources.agents.trading_agent import TradingAgent
 from sources.language import LanguageUtility
 from sources.utility import pretty_print, animate_thinking, timer_decorator
 from sources.logger import Logger
@@ -340,6 +341,13 @@ class AgentRouter:
             ("Can you use a MCP to find write notes to flomo", "mcp"),
             ("Can you use a MCP to query my calendar and find the next meeting?", "mcp"),
             ("Can you use a mcp to get the distance between Shanghai and Paris?", "mcp"),
+            ("Buy 10 shares of Tesla on Robinhood", "trading"),
+            ("Check my Robinhood portfolio and make a trade", "trading"),
+            ("Execute a trading strategy on Robinhood for NVDA calls", "trading"),
+            ("Sell my TSLA position on Robinhood", "trading"),
+            ("Run the trading bot and buy momentum stocks", "trading"),
+            ("What's my Robinhood buying power?", "trading"),
+            ("Place an options order on Robinhood for COIN", "trading"),
             ("Setup a new flutter project called 'new_flutter_project'", "files"),
             ("can you create a new project called 'new_project'", "files"),
             ("can you make a simple web app that display a list of files in my dir", "code"),

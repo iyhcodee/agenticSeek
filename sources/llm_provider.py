@@ -32,11 +32,12 @@ class Provider:
             "together": self.together_fn,
             "dsk_deepseek": self.dsk_deepseek,
             "openrouter": self.openrouter_fn,
+            "anthropic": self.anthropic_fn,
             "test": self.test_fn
         }
         self.logger = Logger("provider.log")
         self.api_key = None
-        self.unsafe_providers = ["openai", "deepseek", "dsk_deepseek", "together", "google", "openrouter"]
+        self.unsafe_providers = ["openai", "deepseek", "dsk_deepseek", "together", "google", "openrouter", "anthropic"]
         if self.provider_name not in self.available_providers:
             raise ValueError(f"Unknown provider: {provider_name}")
         if self.provider_name in self.unsafe_providers and self.is_local == False:
@@ -224,7 +225,7 @@ class Provider:
 
     def anthropic_fn(self, history, verbose=False):
         """
-        Use Anthropic to generate text.
+        Use Anthropic Claude to generate text.
         """
         from anthropic import Anthropic
 
@@ -232,19 +233,25 @@ class Provider:
         system_message = None
         messages = []
         for message in history:
-            clean_message = {'role': message['role'], 'content': message['content']}
             if message['role'] == 'system':
                 system_message = message['content']
             else:
-                messages.append(clean_message)
+                messages.append({'role': message['role'], 'content': message['content']})
+
+        # Anthropic requires at least one user message
+        if not messages:
+            messages = [{"role": "user", "content": "Begin."}]
+
+        create_kwargs = dict(
+            model=self.model,
+            max_tokens=8096,
+            messages=messages,
+        )
+        if system_message:
+            create_kwargs["system"] = system_message
 
         try:
-            response = client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                messages=messages,
-                system=system_message
-            )
+            response = client.messages.create(**create_kwargs)
             if response is None:
                 raise Exception("Anthropic response is empty.")
             thought = response.content[0].text
