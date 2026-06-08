@@ -35,19 +35,24 @@ class RobinhoodTradingTool(Tools):
 
     Session tokens are cached by robin_stocks at ~/.tokens/robinhood.pickle
     so re-login is only needed when the session expires.
+
+    dry_run=True (default): all order actions are logged but never sent to Robinhood.
+    dry_run=False         : real orders — only set this when you mean it.
     """
 
-    def __init__(self):
+    def __init__(self, dry_run: bool = True):
         super().__init__()
         self.tag = "robinhood"
         self.name = "Robinhood Trading Tool"
+        self.dry_run = dry_run
         self.description = (
-            "Execute live trades and fetch market data via Robinhood. "
+            "Fetch market data and (if live mode) execute trades via Robinhood. "
             "Supports: get_portfolio, get_account_info, get_quotes, "
             "get_options_chain, place_order, place_options_order, cancel_order."
         )
         self._rh = None          # robin_stocks.robinhood module, set after login
         self._logged_in = False
+        self._simulated_orders: List[Dict] = []   # paper-trade log
 
     # ------------------------------------------------------------------ #
     #  Authentication                                                       #
@@ -182,10 +187,31 @@ class RobinhoodTradingTool(Tools):
     #  Order execution                                                      #
     # ------------------------------------------------------------------ #
 
+    def _dry_run_order(self, order_details: Dict) -> Dict:
+        """Log a simulated order instead of sending it to Robinhood."""
+        import time
+        order_details["simulated"] = True
+        order_details["dry_run"] = True
+        order_details["note"] = (
+            "DRY RUN — no real order placed. "
+            "Pass --live to run_trading_agent.py to trade for real."
+        )
+        order_details["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        self._simulated_orders.append(order_details)
+        return order_details
+
     def place_order(self, symbol: str, side: str, quantity: float,
                     order_type: str = "market",
                     limit_price: float = None,
                     stop_price: float = None) -> Dict:
+        order_details = {
+            "symbol": symbol, "side": side, "quantity": quantity,
+            "type": order_type, "limit_price": limit_price, "stop_price": stop_price,
+        }
+
+        if self.dry_run:
+            return self._dry_run_order(order_details)
+
         self.ensure_logged_in()
         try:
             if side == "buy":
@@ -211,11 +237,8 @@ class RobinhoodTradingTool(Tools):
 
             return {
                 "order_id": result.get("id"),
-                "symbol": symbol,
-                "side": side,
-                "quantity": quantity,
-                "type": order_type,
-                "state": result.get("state"),
+                "symbol": symbol, "side": side, "quantity": quantity,
+                "type": order_type, "state": result.get("state"),
                 "created_at": result.get("created_at"),
             }
         except Exception as e:
@@ -225,47 +248,46 @@ class RobinhoodTradingTool(Tools):
                             strike_price: str, option_type: str,
                             side: str, quantity: int,
                             limit_price: float) -> Dict:
+        order_details = {
+            "symbol": symbol, "expiration_date": expiration_date,
+            "strike_price": strike_price, "option_type": option_type,
+            "side": side, "quantity": quantity, "limit_price": limit_price,
+        }
+
+        if self.dry_run:
+            return self._dry_run_order(order_details)
+
         self.ensure_logged_in()
         try:
             if side == "buy":
                 result = self._rh.orders.order_buy_option_limit(
-                    positionEffect="open",
-                    creditOrDebit="debit",
-                    price=limit_price,
-                    symbol=symbol,
-                    quantity=quantity,
-                    expirationDate=expiration_date,
-                    strike=strike_price,
+                    positionEffect="open", creditOrDebit="debit",
+                    price=limit_price, symbol=symbol, quantity=quantity,
+                    expirationDate=expiration_date, strike=strike_price,
                     optionType=option_type,
                 )
             elif side == "sell":
                 result = self._rh.orders.order_sell_option_limit(
-                    positionEffect="close",
-                    creditOrDebit="credit",
-                    price=limit_price,
-                    symbol=symbol,
-                    quantity=quantity,
-                    expirationDate=expiration_date,
-                    strike=strike_price,
+                    positionEffect="close", creditOrDebit="credit",
+                    price=limit_price, symbol=symbol, quantity=quantity,
+                    expirationDate=expiration_date, strike=strike_price,
                     optionType=option_type,
                 )
             else:
                 return {"error": f"Unknown side: {side}"}
             return {
                 "order_id": result.get("id"),
-                "symbol": symbol,
-                "side": side,
-                "option_type": option_type,
-                "strike": strike_price,
-                "expiration": expiration_date,
-                "quantity": quantity,
-                "limit_price": limit_price,
+                "symbol": symbol, "side": side, "option_type": option_type,
+                "strike": strike_price, "expiration": expiration_date,
+                "quantity": quantity, "limit_price": limit_price,
                 "state": result.get("state"),
             }
         except Exception as e:
             return {"error": str(e)}
 
     def cancel_order(self, order_id: str) -> Dict:
+        if self.dry_run:
+            return self._dry_run_order({"action": "cancel_order", "order_id": order_id})
         self.ensure_logged_in()
         try:
             result = self._rh.orders.cancel_stock_order(order_id)

@@ -4,12 +4,18 @@ Robinhood AI Trading Agent — powered by Claude
 First-time setup (run once):
     python setup_trading.py
 
-Then run:
+Dry-run mode (DEFAULT — reads your account, shows trades, places NOTHING):
+    python run_trading_agent.py --once
     python run_trading_agent.py              # loop every 5 minutes
-    python run_trading_agent.py --once       # one decision cycle
-    python run_trading_agent.py --interval 60
-    python run_trading_agent.py --model claude-opus-4-8   # max reasoning
-    python run_trading_agent.py --prompt "focus only on NVDA and TSLA calls today"
+
+Live trading (real orders — explicit opt-in required):
+    python run_trading_agent.py --once --live
+    python run_trading_agent.py --live --interval 60
+
+Other options:
+    --model claude-opus-4-8     maximum reasoning power
+    --prompt "..."              custom trading instruction
+    --verbose                   show raw LLM output
 """
 
 import os
@@ -70,6 +76,8 @@ def parse_args():
                    help="Claude model (default: claude-sonnet-4-6)")
     p.add_argument("--verbose",  action="store_true",
                    help="Show raw LLM output")
+    p.add_argument("--live",     action="store_true",
+                   help="Place REAL orders. Default is dry-run (no real trades).")
     return p.parse_args()
 
 
@@ -90,6 +98,22 @@ async def main():
         pretty_print(f"Missing prompt file: {PROMPT_PATH}", color="failure")
         sys.exit(1)
 
+    dry_run = not args.live
+
+    if dry_run:
+        pretty_print("=" * 60, color="warning")
+        pretty_print("  DRY-RUN MODE — reading your account but placing NO real orders.", color="warning")
+        pretty_print("  Add --live to enable real trading.", color="warning")
+        pretty_print("=" * 60, color="warning")
+    else:
+        pretty_print("=" * 60, color="failure")
+        pretty_print("  LIVE TRADING MODE — real orders will be placed!", color="failure")
+        pretty_print("=" * 60, color="failure")
+        confirm = input("  Type YES to confirm live trading: ").strip()
+        if confirm != "YES":
+            pretty_print("Cancelled. Run without --live for dry-run mode.", color="warning")
+            sys.exit(0)
+
     pretty_print(f"Starting trading agent — model: {args.model}", color="status")
 
     provider = Provider(
@@ -103,6 +127,7 @@ async def main():
         prompt_path=PROMPT_PATH,
         provider=provider,
         verbose=args.verbose,
+        dry_run=dry_run,
     )
 
     if args.once:

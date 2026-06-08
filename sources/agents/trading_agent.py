@@ -14,12 +14,13 @@ class TradingAgent(Agent):
     The LLM drives all decisions via JSON action blocks.
     """
 
-    def __init__(self, name, prompt_path, provider, verbose=False):
+    def __init__(self, name, prompt_path, provider, verbose=False, dry_run=True):
         super().__init__(name, prompt_path, provider, verbose, None)
         self.role = "trading"
         self.type = "trading_agent"
+        self.dry_run = dry_run
         self.tools = {
-            "robinhood": RobinhoodTradingTool(),
+            "robinhood": RobinhoodTradingTool(dry_run=dry_run),
         }
         self.memory = Memory(
             self.load_prompt(prompt_path),
