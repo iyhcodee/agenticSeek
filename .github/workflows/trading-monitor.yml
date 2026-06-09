@@ -1,0 +1,125 @@
+name: Trading Monitor — PHOSPHOR IGNITION
+
+on:
+  schedule:
+    # Every 5 minutes during market hours (Mon–Fri, 13:25–20:05 UTC = 9:25 AM–4:05 PM ET)
+    - cron: '25,30,35,40,45,50,55 13 * * 1-5'
+    - cron: '*/5 14-19 * * 1-5'
+    - cron: '0,5 20 * * 1-5'
+    # Hourly overnight and weekends for position monitoring
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Trading instruction override'
+        required: false
+        default: ''
+      mode:
+        description: 'Mode: scan | report | execute'
+        required: false
+        default: 'scan'
+
+jobs:
+  trading-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: claude/friendly-mayer-aboc6f
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Determine market session
+        id: session
+        run: |
+          HOUR=$(date -u +%H)
+          MIN=$(date -u +%M)
+          DOW=$(date -u +%u)   # 1=Mon … 7=Sun
+          TOTAL_MIN=$(( HOUR * 60 + MIN ))
+          # Pre-market: 9:00–9:30 AM ET = 13:00–13:30 UTC
+          # Regular:    9:30 AM–4:00 PM ET = 13:30–20:00 UTC
+          # After-hours:4:00–8:00 PM ET = 20:00–00:00 UTC
+          if [ "$DOW" -ge 6 ]; then
+            echo "session=overnight" >> $GITHUB_OUTPUT
+          elif [ "$TOTAL_MIN" -ge 810 ] && [ "$TOTAL_MIN" -lt 840 ]; then
+            echo "session=premarket" >> $GITHUB_OUTPUT
+          elif [ "$TOTAL_MIN" -ge 840 ] && [ "$TOTAL_MIN" -lt 1200 ]; then
+            echo "session=regular" >> $GITHUB_OUTPUT
+          elif [ "$TOTAL_MIN" -ge 1200 ] && [ "$TOTAL_MIN" -lt 1440 ]; then
+            echo "session=afterhours" >> $GITHUB_OUTPUT
+          else
+            echo "session=overnight" >> $GITHUB_OUTPUT
+          fi
+          echo "time_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
+      - name: Run trading cycle
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ROBINHOOD_MCP_TOKEN: ${{ secrets.ROBINHOOD_MCP_TOKEN }}
+          TRADING_SESSION: ${{ steps.session.outputs.session }}
+          AGENTIC_ACCOUNT: "591749635"
+        run: |
+          SESSION="${{ steps.session.outputs.session }}"
+          echo "Session: $SESSION at ${{ steps.session.outputs.time_utc }}"
+
+          if [ "$SESSION" = "regular" ] || [ "$SESSION" = "premarket" ]; then
+            PROMPT="PHOSPHOR IGNITION active session. Session=$SESSION. Check all positions in account 591749635. Scan for momentum setups: pull quotes on SMCI, RGTI, SOUN, MVIS, LAB, HOLO, LAES. Apply PHOSPHOR IGNITION rules: price \$0.15-\$5, RVOL context from price action, manage existing positions. Cut any position down more than 15% from entry immediately. Deploy available buying power if a qualifying setup exists — ORB confirmation required for new entries. Post a concise trade log."
+          elif [ "$SESSION" = "afterhours" ]; then
+            PROMPT="After-hours monitor. Check positions in account 591749635. Pull quotes on all open positions plus SOXL and TQQQ as market proxies. Report current P&L on each position. Flag anything down more than 10% for review at next open. No new entries — AH penny stocks are untradable. Save buying power for open."
+          else
+            PROMPT="Overnight/weekend monitor. Check positions in account 591749635. Report current P&L snapshot. Note any significant after-hours moves. No trades. Hold until market open."
+          fi
+
+          OVERRIDE="${{ github.event.inputs.prompt }}"
+          if [ -n "$OVERRIDE" ]; then
+            PROMPT="$OVERRIDE"
+          fi
+
+          python run_trading_agent.py --once --prompt "$PROMPT" --model claude-sonnet-4-6 2>&1 | tee trading_output.txt
+
+      - name: Post hourly report to GitHub Issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SESSION="${{ steps.session.outputs.session }}"
+          TIME="${{ steps.session.outputs.time_utc }}"
+          HOUR=$(date -u +%M)
+
+          # Post full report on the hour, brief scan otherwise
+          if [ "$HOUR" = "00" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            REPORT_TYPE="HOURLY REPORT"
+          else
+            REPORT_TYPE="SCAN"
+          fi
+
+          OUTPUT=$(cat trading_output.txt 2>/dev/null | tail -50 || echo "No output")
+
+          BODY="### $REPORT_TYPE — $TIME
+**Session:** \`$SESSION\`
+
+\`\`\`
+$OUTPUT
+\`\`\`
+"
+          # Post to issue #1 (create it manually once as the trading log)
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "$BODY" 2>/dev/null || \
+          echo "Note: Create issue #1 titled 'Trading Log' in your repo to receive reports"
+
+      - name: Upload trading log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-log-${{ steps.session.outputs.time_utc }}
+          path: trading_output.txt
+          retention-days: 7
