@@ -1,0 +1,102 @@
+name: Live Price Checker (Temporary Monitor)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # every 5 minutes, 24/7
+  workflow_dispatch:         # also runnable manually from GitHub UI
+
+jobs:
+  check-prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Fetch prices and post update
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Entry prices
+          CLOV_ENTRY=4.25
+          LAB_ENTRY=0.82
+
+          # Fetch CLOV price from Yahoo Finance (no API key needed)
+          CLOV_DATA=$(curl -s "https://query1.finance.yahoo.com/v8/finance/chart/CLOV?interval=1m&range=1d" \
+            -H "User-Agent: Mozilla/5.0")
+          CLOV_PRICE=$(echo "$CLOV_DATA" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+try:
+    p=d['chart']['result'][0]['meta']['regularMarketPrice']
+    print(f'{p:.4f}')
+except:
+    print('N/A')
+")
+
+          # Fetch LAB price
+          LAB_DATA=$(curl -s "https://query1.finance.yahoo.com/v8/finance/chart/LAB?interval=1m&range=1d" \
+            -H "User-Agent: Mozilla/5.0")
+          LAB_PRICE=$(echo "$LAB_DATA" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+try:
+    p=d['chart']['result'][0]['meta']['regularMarketPrice']
+    print(f'{p:.4f}')
+except:
+    print('N/A')
+")
+
+          TIME=$(date -u +'%I:%M %p UTC')
+          ET_HOUR=$(( $(date -u +%H) - 4 ))
+          ET_MIN=$(date -u +%M)
+          TIME_ET=$(printf "%02d:%s %s ET" $ET_HOUR $ET_MIN "$([ $ET_HOUR -ge 12 ] && echo PM || echo AM)")
+
+          # Calculate P&L
+          CLOV_PNL=$(python3 -c "
+p=float('$CLOV_PRICE') if '$CLOV_PRICE' != 'N/A' else 0
+e=$CLOV_ENTRY
+if e>0: pct=((p-e)/e)*100; print(f'{pct:+.1f}%')
+else: print('N/A')
+")
+          LAB_PNL=$(python3 -c "
+p=float('$LAB_PRICE') if '$LAB_PRICE' != 'N/A' else 0
+e=$LAB_ENTRY
+if e>0: pct=((p-e)/e)*100; print(f'{pct:+.1f}%')
+else: print('N/A')
+")
+
+          # Alert detection
+          ALERTS=""
+          python3 -c "
+p=float('$CLOV_PRICE') if '$CLOV_PRICE'!='N/A' else 0
+if p>=$CLOV_ENTRY*1.25: print('SELL_ALERT_CLOV')
+elif p<=$CLOV_ENTRY*0.85: print('STOP_ALERT_CLOV')
+" | grep -q SELL_ALERT_CLOV && ALERTS="$ALERTS 🚨 CLOV HIT +25% SELL NOW"
+          python3 -c "
+p=float('$CLOV_PRICE') if '$CLOV_PRICE'!='N/A' else 0
+if p<=$CLOV_ENTRY*0.85: print('STOP')
+" | grep -q STOP && ALERTS="$ALERTS 🛑 CLOV STOP -15%"
+          python3 -c "
+p=float('$LAB_PRICE') if '$LAB_PRICE'!='N/A' else 0
+if p>=$LAB_ENTRY*1.25: print('SELL')
+" | grep -q SELL && ALERTS="$ALERTS 🚨 LAB HIT +25% SELL NOW"
+          python3 -c "
+p=float('$LAB_PRICE') if '$LAB_PRICE'!='N/A' else 0
+if p<=$LAB_ENTRY*0.85: print('STOP')
+" | grep -q STOP && ALERTS="$ALERTS 🛑 LAB STOP -15%"
+
+          # Build message
+          if [ -n "$ALERTS" ]; then
+            ICON="🚨"
+          else
+            ICON="🤖"
+          fi
+
+          MSG="$ICON $TIME_ET | CLOV \$$CLOV_PRICE ($CLOV_PNL) | LAB \$$LAB_PRICE ($LAB_PNL)${ALERTS:+ |$ALERTS}"
+
+          echo "Update: $MSG"
+
+          # Post to GitHub Issue #1
+          gh issue comment 1 \
+            --repo "$REPO" \
+            --body "$MSG" 2>/dev/null || echo "Create Issue #1 titled 'Trading Log' to receive updates"
